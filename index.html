@@ -276,7 +276,7 @@ function renderDraft() {
   draft.photos.forEach((p,i) => bits.push(`<div class="block"><button class="x" data-rm="photo" data-i="${i}">×</button><img src="${url(p)}" alt="" /></div>`));
   if (draft.voice) bits.push(`<div class="block"><button class="x" data-rm="voice">×</button><span class="lab">Voice</span><audio controls src="${url(draft.voice)}"></audio></div>`);
   if (draft.showText) bits.push(`<div class="block"><button class="x" data-rm="text">×</button><span class="lab">Write</span><textarea id="writeBox" placeholder="Saw an orange cat outside the dorm.">${esc(draft.text)}</textarea></div>`);
-  if (draft.showSong) bits.push(`<div class="block"><button class="x" data-rm="song">×</button><span class="lab">Song</span><input type="text" id="songBox" placeholder="Name, or paste a Spotify / Apple link" value="${esc(draft.song)}" /><p class="hint" style="margin:8px 0 0">We'll make a link to Spotify search. Or paste the exact track URL.</p></div>`);
+  if (draft.showSong) bits.push(`<div class="block"><button class="x" data-rm="song">×</button><span class="lab">Song</span><input type="text" id="songBox" placeholder="Start typing a title" value="${esc(draft.song)}" autocomplete="off" /><div id="songHints" class="suggest"></div></div>`);
   if (draft.showPlace) bits.push(`<div class="block"><button class="x" data-rm="place">×</button><span class="lab">Place</span><input type="text" id="placeBox" placeholder="Almaty, a café, or paste a maps link" value="${esc(draft.place)}" autocomplete="off" /><div id="placeHints" class="suggest"></div></div>`);
   stack.innerHTML = bits.length ? bits.join("") : `<div class="ghost-stack">Photo, voice, a line, a song, a place — any of them, or all of them.</div>`;
   stack.querySelectorAll(".x").forEach(btn => btn.onclick = () => {
@@ -289,7 +289,15 @@ function renderDraft() {
     syncTools(); renderDraft();
   });
   const bind = (id, key) => { const el = document.getElementById(id); if (!el) return; el.oninput = () => { draft[key] = el.value; document.getElementById("keepBtn").disabled = !hasTrace(); }; };
-  bind("writeBox", "text"); bind("songBox", "song");
+  bind("writeBox", "text");
+  const songBox = document.getElementById("songBox");
+  if (songBox) {
+    songBox.oninput = () => {
+      draft.song = songBox.value;
+      document.getElementById("keepBtn").disabled = !hasTrace();
+      scheduleSongHints(songBox.value);
+    };
+  }
   const placeBox = document.getElementById("placeBox");
   if (placeBox) {
     placeBox.oninput = () => {
@@ -403,25 +411,39 @@ function mapsHref(name) {
 }
 
 let placeTimer = null;
+let songTimer = null;
+
 function schedulePlaceHints(q) {
   clearTimeout(placeTimer);
   const box = document.getElementById("placeHints");
   const query = (q || "").trim();
   if (!box) return;
   if (query.length < 2 || /^https?:\/\//i.test(query)) { box.innerHTML = ""; return; }
+  box.innerHTML = `<button type="button" disabled>Looking…</button>`;
   placeTimer = setTimeout(() => lookupPlace(query), 280);
+}
+
+function scheduleSongHints(q) {
+  clearTimeout(songTimer);
+  const box = document.getElementById("songHints");
+  const query = (q || "").trim();
+  if (!box) return;
+  if (query.length < 2 || /^https?:\/\//i.test(query)) { box.innerHTML = ""; return; }
+  box.innerHTML = `<button type="button" disabled>Looking…</button>`;
+  songTimer = setTimeout(() => lookupSong(query), 280);
 }
 
 async function lookupPlace(q) {
   const box = document.getElementById("placeHints");
   if (!box) return;
   try {
-    const r = await fetch("https://photon.komoot.io/api/?limit=5&lang=en&q=" + encodeURIComponent(q));
+    const r = await fetch("https://photon.komoot.io/api/?limit=5&q=" + encodeURIComponent(q));
     const data = await r.json();
     const items = (data.features || []).map(f => {
       const p = f.properties || {};
       return [...new Set([p.name, p.street, p.city || p.county, p.country].filter(Boolean))].join(", ");
     }).filter((v, i, a) => v && a.indexOf(v) === i).slice(0, 5);
+    if (!items.length) { box.innerHTML = `<button type="button" disabled>No match — keep this name</button>`; return; }
     box.innerHTML = items.map(s => `<button type="button">${esc(s)}</button>`).join("");
     box.querySelectorAll("button").forEach(b => b.onclick = () => {
       draft.place = b.textContent;
@@ -431,7 +453,31 @@ async function lookupPlace(q) {
       document.getElementById("keepBtn").disabled = !hasTrace();
     });
   } catch (e) {
-    box.innerHTML = "";
+    box.innerHTML = `<button type="button" disabled>Can't reach maps — type it yourself</button>`;
+  }
+}
+
+async function lookupSong(q) {
+  const box = document.getElementById("songHints");
+  if (!box) return;
+  try {
+    const r = await fetch("https://itunes.apple.com/search?entity=song&limit=5&term=" + encodeURIComponent(q));
+    const data = await r.json();
+    const items = (data.results || []).map(t => ({
+      label: `${t.trackName} — ${t.artistName}`,
+      href: t.trackViewUrl || ""
+    })).filter(t => t.label);
+    if (!items.length) { box.innerHTML = `<button type="button" disabled>No match — keep this name</button>`; return; }
+    box.innerHTML = items.map(t => `<button type="button" data-href="${esc(t.href)}">${esc(t.label)}</button>`).join("");
+    box.querySelectorAll("button").forEach(b => b.onclick = () => {
+      draft.song = b.dataset.href || b.textContent;
+      const input = document.getElementById("songBox");
+      if (input) input.value = b.textContent;
+      box.innerHTML = "";
+      document.getElementById("keepBtn").disabled = !hasTrace();
+    });
+  } catch (e) {
+    box.innerHTML = `<button type="button" disabled>Can't reach catalog — type it yourself</button>`;
   }
 }
 
